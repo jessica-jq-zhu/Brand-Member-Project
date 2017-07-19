@@ -1,0 +1,251 @@
+# High-Value-Member
+#参数配置
+###表一的截止时间
+table_one_end_date<-as.character(2017-05-01)
+###净折扣率设置
+gross_margin_bar<-as.numeric(as.character(0.5))
+###TOP排名限制
+TOP_bar<-as.integer(as.character(50))
+
+
+#导入详细订单数据
+member_raw<-read.csv("C:\\Users\\Administrator\\Desktop\\高价值会员分析\\SQL代码与原始数据集20170628\\华南天美意-原始数据集\\订单明细-原始数据集(含虚实属性).csv",header=T,sep=',',row.names = NULL)
+
+#数据预处理
+#刨除非鞋的明细订单，如“物料 ”，“包饰“等
+member_raw<-member_raw[which(member_raw$product_category_no==1),]
+
+#定位出明细订单里有tag_price/settle_price为零的数据
+library(dplyr)
+member_raw<-filter(member_raw,member_raw$tag_price!=0)
+member_raw<-filter(member_raw,member_raw$settle_price!=0)
+
+#新增一列，计算净折扣率（净折扣率）
+member_raw$net_discount_percentage<-with(member_raw,(balance_base-conprice_ladder_amount-prom_plusbuckle_amount)/(tag_price*qty))
+#对净折扣率进行分组
+member_raw$discount_bar<-NA
+member_raw<-within(member_raw,{
+  discount_bar[net_discount_percentage>=0.9]<-'9折以上'
+  discount_bar[net_discount_percentage>=0.8 & net_discount_percentage<0.9]<-'8-9折'
+  discount_bar[net_discount_percentage>=0.7 & net_discount_percentage<0.8]<-'7-8折'  
+  discount_bar[net_discount_percentage>=0.6 & net_discount_percentage<0.7]<-'6-7折'  
+  discount_bar[net_discount_percentage>=0.5 & net_discount_percentage<0.6]<-'5-6折'  
+  discount_bar[net_discount_percentage>=0.4 & net_discount_percentage<0.5]<-'4-5折'  
+  discount_bar[net_discount_percentage<0.4]<-'4折以下'
+})
+
+#新增一列，计算毛利率
+member_raw$settle_price<-as.numeric(member_raw$settle_price)
+member_raw$product_cost<-as.numeric(member_raw$product_cost)
+member_raw$gross_profit_margin<-(((member_raw$settle_price)-(member_raw$product_cost))/member_raw$settle_price)
+
+#新增一列，计算折扣率
+member_raw$deposit_rate<-member_raw$settle_price/member_raw$tag_price
+
+#把原始数据集拆分为两个,一个筛选表一,一个筛选表二、表三
+member_raw$out_date<-as.POSIXct(member_raw$out_date)
+member_raw_20170430<-filter(member_raw,as.Date(member_raw$out_date)<as.Date("table_one_end_date"))
+member_raw_20170615<-filter(member_raw,as.Date(member_raw$out_date)>=as.Date("table_one_end_date"))
+
+#针对member_raw_20170430进行实数筛选
+member_raw_20170430<-member_raw_20170430[which(member_raw_20170430$virtual_flag!=0),]
+
+#导入销售量排行表
+accumulated_sales_rankings_20170430<-read.csv("C:\\Users\\Administrator\\Desktop\\高价值会员分析\\SQL代码与原始数据集20170622\\20170622累计销售量排行\\累积销售量排行~20170430.csv",header=T,sep=',',row.names = NULL)
+accumulated_sales_rankings_20170615<-read.csv("C:\\Users\\Administrator\\Desktop\\高价值会员分析\\SQL代码与原始数据集20170622\\20170622累计销售量排行\\累计销售量排行~20170615.csv",header=T,sep=',',row.names = NULL)
+
+#对销售量的数据进行筛选
+accumulated_sales_rankings_20170430<-accumulated_sales_rankings_20170430[,c("product_code","当季货品累计销售量","当季货品累计销售量排名")]
+accumulated_sales_rankings_20170615<-accumulated_sales_rankings_20170615[,c("product_code","当季货品累计销售量","当季货品累计销售量排名")]
+
+#用product_code把member_raw分别与sales_ranking连接起来
+library(plyr)
+member_raw_20170430<-join(member_raw_20170430,accumulated_sales_rankings_20170430,by="product_code",type="left",match="all")
+member_raw_20170615<-join(member_raw_20170615,accumulated_sales_rankings_20170615,by="product_code",type="left",match="all")
+
+#针对原始数据集进行TOP50和净折扣率的标识处理
+member_raw_20170430$net_discount_percentage_index<-ifelse(member_raw_20170430$net_discount_percentage>=gross_margin_bar,"净折扣率以上","NA")
+member_raw_20170430$TOP_index<-ifelse(member_raw_20170430$当季货品累计销售量排名<=TOP_bar,"TOP","NA")
+
+#开始by member_id针对会员的购买行为进行统计
+library(reshape2)
+high_value_member_raw<-member_raw_20170430[,c("member_id","product_year_name","product_season_name","net_discount_percentage_index","TOP_index")]
+high_value_member_raw2<-dcast(high_value_member_raw,member_id~product_season_name+product_year_name+net_discount_percentage_index+TOP_index)
+high_value_member_raw2<-high_value_member_raw2[,c(1,6,7,8,9,26,27,28,29)]
+high_value_member_raw2$index<-as.numeric(high_value_member_raw2$春_2017_NA_NA+
+                                           high_value_member_raw2$春_2017_NA_TOP+
+                                           high_value_member_raw2$春_2017_净折扣率以上_NA+
+                                           high_value_member_raw2$夏_2017_NA_NA+
+                                           high_value_member_raw2$夏_2017_NA_TOP+
+                                           high_value_member_raw2$夏_2017_净折扣率以上_NA)
+high_value_member_raw3<-high_value_member_raw2[which(high_value_member_raw2$index<1),]
+high_value_member_raw3<-high_value_member_raw3[which(high_value_member_raw3$春_2017_净折扣率以上_TOP>=1),]
+high_value_member_raw3<-high_value_member_raw3[which(high_value_member_raw3$夏_2017_净折扣率以上_TOP>=1),]
+
+high_value_member_list<-high_value_member_raw3[,c("member_id","春_2017_净折扣率以上_TOP","夏_2017_净折扣率以上_TOP")]
+high_value_member_list$buy_sum<-c(high_value_member_list$春_2017_净折扣率以上_TOP+high_value_member_list$夏_2017_净折扣率以上_TOP)
+high_value_member_list<-high_value_member_list[which(high_value_member_list$buy_sum<=6),]
+
+#构造第一个样表
+table_one<-join(high_value_member_list,member_raw_20170430,by="member_id",type="left",match="all")
+table_one<-table_one[which(table_one$net_discount_percentage>=0.5&table_one$当季货品累计销售量排名<=50),]
+
+table_one$member_age[is.null(table_one$member_age)]<-"0"
+
+library(lubridate)
+table_one$member_age<-round((ymd("2017/4/30")-ymd(table_one$member_birthday))/365,0)
+table_one$member_age[table_one$member_age<=18]<-"未知"
+table_one$member_age[is.na(table_one$member_age)]<-"未知"
+table_one<-table_one[,c("member_id",
+                        "member_age",
+                        "member_level_name",
+                        "current_valid_score",
+                        "order_no",
+                        "out_time",
+                        "normal_province_name",
+                        "normal_city_name",
+                        "store_no",
+                        "store_nm",
+                        "product_code",
+                        "product_name",
+                        "product_year_name",
+                        "product_season_name",
+                        "product_size_no",
+                        "product_color_name",
+                        "当季货品累计销售量排名",
+                        "qty",
+                        "tag_price",
+                        "settle_price",
+                        "buy_sum")]
+
+table_one<-table_one[order(table_one$member_level_name,
+                           table_one$member_id,
+                           table_one$out_time,
+                           table_one$product_year_name,
+                           table_one$product_season_name,
+                           table_one$product_code),]
+
+##此处需要加一列作为高价值会员编号
+
+#构造第二个样表
+high_value_member<-table_one[,c("member_id","buy_sum")]
+high_value_member<-unique(high_value_member)
+table_two<-join(high_value_member,member_raw_20170615,by="member_id",type="left",match="all")
+
+##此处如果表一的高价值会员编号实现了，则以下代码需要考虑并改进
+
+table_two<-table_two[,c("out_date",
+                        "member_id",
+                        "product_code",
+                        "product_name",
+                        "product_year_name",
+                        "product_season_name",
+                        "当季货品累计销售量",
+                        "当季货品累计销售量排名",
+                        "gross_profit_margin",
+                        "deposit_rate")]
+table_two<-table_two[complete.cases(table_two),]
+table_two<-table_two[order(table_two$member_id,
+                           table_two$out_date,
+                           table_two$product_year_name,
+                           table_two$product_season_name,
+                           -table_two$当季货品累计销售量),]
+
+
+
+#构造第三个表
+booming_product_code<-unique(table_two[,c("product_code","product_name")])
+table_three<-join(booming_product_code,member_raw_20170615,by="product_code",type="left",match="all")
+table_three<-table_three[,c("product_code",
+                            "product_name",
+                            "product_year_name",
+                            "product_season_name",
+                            "product_color_name",
+                            "member_id",
+                            "member_province_name",
+                            "member_city_name",
+                            "member_level_name",
+                            "order_no",
+                            "out_time",
+                            "store_no",
+                            "store_nm",
+                            "normal_province_name",
+                            "normal_city_name",
+                            "product_size_no",
+                            "qty",
+                            "tag_price",
+                            "settle_price",
+                            "deposit_rate",
+                            "discount_bar")]
+table_three<-table_three[order(table_three$product_code,
+                               table_three$product_name,
+                               table_three$out_time,
+                               table_three$member_level_name,
+                               table_three$member_id,
+                               table_three$qty,
+                               table_three$settle_price),]                   
+
+
+
+
+#对报表一的重命名需要最后处理
+names(table_one)<-c("会员ID",
+                    "会员年龄",
+                    "会员等级",
+                    "有效积分",
+                    "单据编号",
+                    "销售时间",
+                    "行政省",
+                    "经营城市",
+                    "店铺编码",
+                    "店铺名称",
+                    "货号",
+                    "货品名称",
+                    "货品年份",
+                    "货品季节",
+                    "尺码",
+                    "颜色",
+                    "累计销量排名",
+                    "数量",
+                    "牌价",
+                    "结算价",
+                    "会员购买数量总计")
+
+#对报表二的重命名需要最后处理
+names(table_two)<-c("日期",
+                    "高价值会员ID",
+                    "货号",
+                    "货品名称",
+                    "货品年份",
+                    "货品季节",
+                    "累计销售量",
+                    "累计销售量排名",
+                    "毛利率",
+                    "折扣率")
+
+#对table_three的字段重命名最后处理
+names(table_three)<-c("货号",
+                      "货品名称",
+                      "货品年份",
+                      "货品季节",
+                      "颜色",
+                      "会员ID",
+                      "会员省区",
+                      "会员城市",
+                      "会员等级",
+                      "销售单号",
+                      "销售时间",
+                      "店铺编码",
+                      "店铺名称",
+                      "行政省份",
+                      "经营城市",
+                      "尺码",
+                      "数量",
+                      "牌价",
+                      "销售结算价",
+                      "折扣",
+                      "折扣段")
+
+write.csv(table_one,file="C:\\Users\\Administrator\\Desktop\\高价值会员分析\\R代码\\华南天美意高价值会员表一.csv",row.names=FALSE)
+write.csv(table_two,file="C:\\Users\\Administrator\\Desktop\\高价值会员分析\\R代码\\华南天美意高价值会员表二.csv",row.names=FALSE)
+write.csv(table_three,file="C:\\Users\\Administrator\\Desktop\\高价值会员分析\\R代码\\华南天美意高价值会员表三.csv",row.names=FALSE)
