@@ -1,9 +1,9 @@
-# High-Value-Member
 #参数配置
 ###表一的截止时间
 table_one_end_date<-as.character(2017-05-01)
-###净折扣率设置
-gross_margin_bar<-as.numeric(as.character(0.5))
+###净折扣率设置,bottom为筛选净折扣率的参数输入框的左端值；top为筛选净折扣率的参数输入框的右端值。
+gross_margin_bar_bottom<-as.numeric(as.character(0.5))
+gross_margin_bar_top<-as.numeric(as.character(0.5))
 ###TOP排名限制
 TOP_bar<-as.integer(as.character(50))
 
